@@ -66,7 +66,9 @@ Of curse, many programs needs to share memory between cores to work, but doing s
 
 ## Inter-processor Communication
 
-So, if a cache line is invalidated if the data exists in the L1 cache on on a different core \(`Shared`state\) and is modified there, there must be some way for the cores to communicate with each other if they're going to know if the state of this cache line has changed?
+So, if we really do need to access and change memory which is `Shared` how does the other cores know that their L1 cache is invalid? 
+
+Well, a cache line is invalidated if the data exists in the L1 cache on on a different core \(remember, it's in the`Shared`state\) and is modified there. To actually inform the other cores that their cached data is invalid there must be some way for the cores to communicate with each other, right?
 
 Yes there is, however, it's pretty hard to find documentation about the exact details. Each CPU has what we can think of as a _mailbox_.
 
