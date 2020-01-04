@@ -1,30 +1,30 @@
 ---
 description: >-
-  Understanding atomics and the meory ordering options when dealing with them
+  Understanding atomics and the memory ordering options when dealing with them
   can help us better understand multithreaded programming and why Rust helps us
   write safe and performant multithreaded code.
 ---
 
 # Explaining Atomics in Rust
 
-Trying to understand atomics by just reading random articles and the documentation in Rust \(or C++ for that matter\) feels like trying to learn physics by reverse enginering `E=MC^2`. Potentially doable with enough grit, but the ratio of `WTF?/AHA!` is enormous.
+Trying to understand atomics by just reading random articles and the documentation in Rust \(or C++ for that matter\) feels like trying to learn physics by reverse engineering`E=MC^2`. Potentially doable with enough grit, but the ratio of `WTF?/AHA!` is enormous.
 
 I'll give it my best try to explain this for myself and for you in this article. If I succeed the ratio should be `WTF?/AHA! < 1`. Let me know in the repo for this article how we did!
 
 ## Multiprocessor programming
 
-When writing code for multiple CPUs there are several subtle things we need to consider. You see, both compilers and CPU's reorder the code we write if they think it will lead to faster execution. In single threaded programs, this is not something we need to consider, but once we start writing multithreaded programs the compiler reordering can get us into truble.
+When writing code for multiple CPUs there are several subtle things we need to consider. You see, both compilers and CPU's reorder the code we write if they think it will lead to faster execution. In single threaded programs, this is not something we need to consider, but once we start writing multithreaded programs the compiler reordering can get us into trouble.
 
 However, while the compiler ordering is possible to check by looking at the disassembled code, things get much more difficult on systems with multiple CPUs.
 
 When threads are run on different CPUs, the internal reordering of instructions on the CPU can lead to some very hard to debug problems since we mostly observe the side effects of CPU reordering, speculative execution, pipelining and caching. 
 
-I don't think the CPU itself know in advance exactly how it's going to run your code.
+I don't think the CPU knows in advance exactly how it's going to run your code either.
 
 {% hint style="warning" %}
 The problem atomics solve are related to memory loads and stores. Any reordering of instructions which does not operate on shared memory has no impact we're concerned about here.
 
-One more thing to note is that I consiously use multi processor or multi core programming, instead of multi `threaded`programming. While related in practice on most systems today, _most_ of this book will **not** apply on a _multithreaded_ but _single core_ system.
+One more thing to note is that I consciouslyuse multi processor or multi core programming, instead of multi `threaded`programming. While related in practice on most systems today, _most_ of this book will **not** apply on a _multithreaded_ but _single core_ system.
 {% endhint %}
 
 Let's start at the bottom and work our way up to a better understanding.
@@ -41,7 +41,7 @@ The L1 cache uses a sort of [MESI caching protocol](https://en.wikipedia.org/wik
 These states apply to each cache line in the L1 cache:
 
 (M) Modified - modified (dirty). Need to write back data to main memory.
-(E) Exclusive - only exists in this cache. Does not ned to be synced (clean).
+(E) Exclusive - only exists in this cache. Doesn't ned to be synced (clean).
 (S) Shared - might exist in other caches. Is current with main memory (clean).
 (I) Invalid - cache line is invalid. Another cache has modified it.
 ```
@@ -51,7 +51,7 @@ Ok, so we can model this for ourselves by thinking that every cache line in the 
 {% hint style="info" %}
 **Does this sound familiar?**
 
-In Rust we have two kind of references `&`shared references, and `&mut`exclusive refrences. 
+In Rust we have two kind of references `&`shared references, and `&mut`exclusive references. 
 
 It will help you alot if you stop thinking of them as `mutable`and `immutable`references, since this is not true all the time. Atomics and types which allow for interior mutability does indeed break this mental model. Think of them as `exclusive`and `shared`instead.
 
@@ -59,7 +59,7 @@ This does indeed map very well to the `E` and `S`, two of the possible states da
 
 In Rust, only memory which is `Exclusive`can be modified by default. 
 
-_This means, as long as we don't break the rule and mutate `Shared`references, all Rust programs can assume that the L1 cache on the core theyre running on is up to date and does not need any synchronization._
+_This means, as long as we don't break the rule and mutate `Shared`references, all Rust programs can assume that the L1 cache on the core they're running on is up to date and does not need any synchronization._
 
 Of curse, many programs needs to share memory between cores to work, but doing so explicitly and with care can lead to better code for running on multiple processors.
 {% endhint %}
@@ -72,7 +72,7 @@ Yes there is, however, it's pretty hard to find documentation about the exact de
 
 This mailbox is what's important for us when we're going to talk about atomics later on. 
 
-This mailbox can buffer a certain number of messenges. Each message is buffered here to avoid interrupting the CPU all the time and force it to handle every message sent from other cores immidiately.
+This mailbox can buffer a certain number of messages. Each message is buffered here to avoid interrupting the CPU all the time and force it to handle every message sent from other cores immediately.
 
  Now, at some point the CPU checks this mailbox \(I've also seen talks about designs which issues an interrupt to the CPU when it needs to process messages\) and updates it's cache accordingly.
 
@@ -80,15 +80,15 @@ Let's take an example of a cache line which is marked as `Shared`.
 
 If a CPU modifies this cache line, it is invalidated in the other caches. The core that modified the data sends a message to rest of the CPU's. When the other cores check their _mailbox_ they see that this cache line is now invalid and the state is updated accordingly in each cache on the other cores.
 
-The L1 cache on each core then fetches the correct value from main memory \(or L2/L3 cache\) and sets it's state to `Shared`again.
+The L1 cache on each core then fetches the correct value from main memory \(or L2/L3 cache\) and sets its state to `Shared`again.
 
 {% hint style="info" %}
-It's usefull to know that none of these operations by default happens immidiately. Both the sending of messages and reading the mailbox can be delayed for an arbitrarely amount of time. The processor will by default first of all focus on performance, secondly on synchonization and cache coherence.
+It's useful to know that none of these operations by default happens immediately. Both the sending of messages and reading the mailbox can be delayed for an arbitrary amount of time. The processor will by default first focus on performance, secondly on synchronization and cache coherence.
 {% endhint %}
 
 ## Memory fences
 
-Now that we have some idea of how the CPU's are designed to coordinate between them, we can talk about different memory orderings and what they mean:
+Now that we have some idea of how the CPUs are designed to coordinate between them, we can talk about different memory orderings and what they mean:
 
 In Rust the memory ordering is represented by the [std::sync::atomic::Ordering](https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html) enum, which has 5 possible values:
 
@@ -106,15 +106,15 @@ All pending messages on the CPU are flushed and sent to the other CPUs mailboxes
 
 ### AcqRel
 
-First process all messages in the inbox \(as we do in `Acquire`\), then then flush changes and notify the other CPUs so they can update their caches \(as we do in `Release`\).
+First process all messages in the inbox \(as we do in `Acquire`\), then flush changes and notify the other CPUs, so they can update their caches \(as we do in `Release`\).
 
 ### SeqCst
 
-Same as `AcqRel`but it also preserves an sequentially consistent order between operations that are marked with `SeqCst`. It's a bit hard to understand, but think of it like special messages which are marked with a timestamp.
+Same as `AcqRel`but it also preserves a sequentially consistent order between operations that are marked with `SeqCst`. It's a bit hard to understand, but think of it like special messages which are marked with a timestamp.
 
-The timestamp is only attached with messages sent to us from a CPU which did an `AcqRel`as a part of `SeqCst`. We only read this timestamp if we are performing a `AcqRel`as a part of a `SeqCst`operation ourselves, and we order these messages chonologically based on their timestamp.
+The timestamp is only attached with messages sent to us from a CPU which did an `AcqRel`as a part of `SeqCst`. We only read this timestamp if we are performing a `AcqRel`as a part of a `SeqCst`operation ourselves, and we order these messages chronologically based on their timestamp.
 
-If we have three cores, A, B and C. All performing `SeqCst`operations on the same memory. Since all of them sort the messages chonologically, they will all read the messages in the order from first to last. The three cores can thereby agree on what happened in which order.
+If we have three cores, A, B and C. All performing `SeqCst`operations on the same memory. Since all of them sort the messages chronologically , they will all read the messages in the order from first to last. The three cores can thereby agree on what happened in which order.
 
 One important thing to note is that if there is any `Acquire`, `Release`or `Relaxed`operations on this memory, the sequential consistency is lost since there is no way to know when that operation happened and thereby agree on a total order of operations.
 
@@ -125,7 +125,7 @@ I have a hard time coming up with a good example where this ordering is the only
 _However, reasoning about_ _`Acquire`and_ _`Release`in complex scenarios can be hard. If you only use_ _`SeqCst`on a part of memory you'll know that you have the strongest memory ordering and you're likely on the "safe side". It makes working with atomics a lot more convenient._
 
 {% hint style="info" %}
-Since these synchonizations happen before the nest operation, and we force the core we're currently running on to synchronize it's cache with the other cores we call these operations `memory fences`or `memory barriers`.
+Since these synchronizations happen before the nest operation, and we force the core we're currently running on to synchronize it's cache with the other cores we call these operations `memory fences`or `memory barriers`.
 {% endhint %}
 
 ## The `lock`CPU instruction prefix
@@ -144,21 +144,21 @@ Its a good time to remind yourself now that `atomic`types is not something the C
 
 ### Now what does this `lock`dinstruction prefix do?
 
-It can quickly become a bit techical, but as far as I understand it, an wasy way to model this is that it sets the cache line state to `Modified`already when the memory is fetched from the case. This way, from the moment it's fetched from a cores L1 cache it's marked as `Modified`and a message to `invalidate`it in the other caches is sent.
+It can quickly become a bit technical, but as far as I understand it, an easy way to model this is that it sets the cache line state to `Modified`already when the memory is fetched from the case. This way, from the moment it's fetched from a cores L1 cache it's marked as `Modified`and a message to `invalidate`it in the other caches is sent.
 
 If you consider a "normal" add operation, the `load`operation does not change the state of the cache line. First when the "add" operation is completed the state of this cache line in the L1 cache is changed.
 
-If you see this in relation to the memory fences discussed above you can understand why this suble change matters.
+If you see this in relation to the memory fences discussed above you can understand why this subtle change matters.
 
 {% hint style="info" %}
-A cache line is most often 64 bytes on a 64 bit system. This can vary based on the exact CPU, but what is important to consider is that the locking mecanisms used if a memory crosses two cache lines is much more expensive and might involve bus locking and other hardware techniques.
+A cache line is most often 64 bytes on a 64 bit system. This can vary based on the exact CPU, but what is important to consider is that the locking mechanisms used if a memory crosses two cache lines is much more expensive and might involve bus locking and other hardware techniques.
 
-Also, atomic operations crossing cache line boundaries have a very varying support based on different arcitectures. **Presumably this is the major reason that all `atomic`operations is limited to `usize`sized data.**
+Also, atomic operations crossing cache line boundaries have a very varying support based on different architectures. **Presumably this is the major reason that all `atomic`operations is limited to `usize`sized data.**
 {% endhint %}
 
 ## Conclusion
 
-Are you still there? If so, relax now, we're done for today. Thanks for staying with me and reading through, I do cincerely hope you enjoyed it and got some value out of it.
+Are you still there? If so, relax now, we're done for today. Thanks for staying with me and reading through, I do sincerely hope you enjoyed it and got some value out of it.
 
 I fundamentally believe that getting a good mental model around problems you actually work hard to deal with has numerous benefits for both your personal motivation and how you write your code even though you never venture into the `std::sync::atomic`module at all in your daily life.
 
