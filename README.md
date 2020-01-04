@@ -24,7 +24,7 @@ I don't think the CPU knows in advance exactly how it's going to run your code e
 {% hint style="warning" %}
 The problem atomics solve are related to memory loads and stores. Any reordering of instructions which does not operate on shared memory has no impact we're concerned about here.
 
-One more thing to note is that I consciouslyuse multi processor or multi core programming, instead of multi `threaded`programming. While related in practice on most systems today, _most_ of this book will **not** apply on a _multithreaded_ but _single core_ system.
+One more thing to note is that I consciously use multi processor or multi core programming, instead of multi `threaded`programming most places. While related in practice on most systems today, _most_ of this book will **not** apply on a _multithreaded_  but _single core_ system.
 {% endhint %}
 
 Let's start at the bottom and work our way up to a better understanding.
