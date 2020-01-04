@@ -144,7 +144,7 @@ Ok, so when we use the methods on atomics like `fetch_add`on [AtomicUsize](https
 Its a good time to remind yourself now that `atomic`types is not something the CPU knows about. An `AtomicUsize`will be represented by a regular `usize`in the CPU. It's the methods and types on the `atomic`which emits different CPU instructions that matter.
 {% endhint %}
 
-### Now what does this `lock`dinstruction prefix do?
+### Now what does this `lock`instruction prefix do?
 
 It can quickly become a bit technical, but as far as I understand it, an easy way to model this is that it sets the cache line state to `Modified`already when the memory is fetched from the case. This way, from the moment it's fetched from a cores L1 cache it's marked as `Modified`and a message to `invalidate`it in the other caches is sent.
 
