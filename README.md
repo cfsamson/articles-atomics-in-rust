@@ -104,7 +104,7 @@ All messages in the inbox of the current CPU are read and processed before the n
 
 ### Release
 
-All pending messages on the CPU are flushed and sent to the other CPUs mailboxes before we perform the nest operation. This is most likely values which was `Shared`but we have been modified, so they're now marked as `Modified`in the cache of the current CPU. Before we proceed with any operation, we flush the changes made to main memory and sends a message to all the other cores that they'll need to mark this cache line as `Invalid`. `Release`memory ordering only makes sense on `store`operation. **For this reason, and opposite of the** **`Acquire`ordering, most** **`load`methods in Rust will panic if you pass in a** **`Release`ordering.**
+All pending messages on the CPU are flushed and sent to the other CPUs mailboxes before we perform the next operation. This is most likely values which was `Shared`but we have been modified, so they're now marked as `Modified`in the cache of the current CPU. Before we proceed with any operation, we flush the changes made to main memory and sends a message to all the other cores that they'll need to mark this cache line as `Invalid`. `Release`memory ordering only makes sense on `store`operation. **For this reason, and opposite of the** **`Acquire`ordering, most** **`load`methods in Rust will panic if you pass in a** **`Release`ordering.**
 
 ### AcqRel
 
@@ -127,7 +127,7 @@ I have a hard time coming up with a good example where this ordering is the only
 _However, reasoning about_ _`Acquire`and_ _`Release`in complex scenarios can be hard. If you only use_ _`SeqCst`on a part of memory you'll know that you have the strongest memory ordering and you're likely on the "safe side". It makes working with atomics a lot more convenient._
 
 {% hint style="info" %}
-Since these synchronizations happen before the nest operation, and we force the core we're currently running on to synchronize it's cache with the other cores we call these operations `memory fences`or `memory barriers`.
+Since these synchronizations happen before the next operation, and we force the core we're currently running on to synchronize it's cache with the other cores we call these operations `memory fences`or `memory barriers`.
 {% endhint %}
 
 ## The `lock`CPU instruction prefix
