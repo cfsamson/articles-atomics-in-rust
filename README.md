@@ -35,7 +35,7 @@ _I'll skip compiler reordering since it's pretty easy to understand. Just know t
 
 Normally, a CPU has three levels of caching: L1, L2, and L3. While L2, and L3 are shared between cores, L1 is a per core cache. Our challenges start here.
 
-The L1 cache uses a sort of [MESI caching protocol](https://en.wikipedia.org/wiki/MESI_protocol). While the name might sound mysterious, it's actually pretty simple. It is an acronym for the different state an item in the cache can find themselves in:
+The L1 cache uses a sort of [MESI caching protocol](https://en.wikipedia.org/wiki/MESI_protocol). While the name might sound mysterious, it's actually pretty simple. It is an acronym for the different states an item in the cache can find themselves in:
 
 ```text
 These states apply to each cache line in the L1 cache:
@@ -46,7 +46,7 @@ These states apply to each cache line in the L1 cache:
 (I) Invalid - cache line is invalid. Another cache has modified it.
 ```
 
-Ok, so we can model this for ourselves by thinking that every cache line in the CPU has an enumwith four states attached to them.
+Ok, so we can model this for ourselves by thinking that every cache line in the CPU has an enum with four states attached to them.
 
 {% hint style="info" %}
 **Does this sound familiar?**
