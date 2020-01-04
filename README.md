@@ -9,7 +9,7 @@ description: >-
 
 Trying to understand atomics by just reading random articles and the documentation in Rust \(or C++ for that matter\) feels like trying to learn physics by reverse engineering`E=MC^2`. Potentially doable with enough grit, but the ratio of `WTF?/AHA!` is enormous.
 
-I'll give it my best try to explain this for myself and for you in this article. If I succeed the ratio should be `WTF?/AHA! < 1`. Let me know in the repo for this article how we did!
+I'll give it my best try to explain this for myself and for you in this article. If I succeed the ratio should be `WTF?/AHA! < 1`. Let me know in the [issue tracker of the repository for this article](https://github.com/cfsamson/articles-atomics-in-rust) how we did.
 
 ## Multiprocessor programming
 
