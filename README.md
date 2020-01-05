@@ -7,7 +7,7 @@ description: >-
 
 # Explaining Atomics in Rust
 
-Trying to understand atomics by just reading random articles and the documentation in Rust \(or C++ for that matter\) feels like trying to learn physics by reverse engineering`E=MC^2`. Potentially doable with enough grit, but the ratio of `WTF?/AHA!` is enormous.
+Trying to understand atomics by just reading random articles and the documentation in Rust \(or C++ for that matter\) feels like trying to learn physics by reverse engineering`E=MC^2`.
 
 I'll give it my best try to explain this for myself and for you in this article. If I succeed the ratio should be `WTF?/AHA! < 1`. Let me know in the [issue tracker of the repository for this article](https://github.com/cfsamson/articles-atomics-in-rust) how we did.
 
@@ -24,17 +24,47 @@ I don't think the CPU knows in advance exactly how it's going to run your code e
 {% hint style="warning" %}
 The problem atomics solve are related to memory loads and stores. Any reordering of instructions which does not operate on shared memory has no impact we're concerned about here.
 
-**We can divide the subject of atomics into two parts:**
-
-1. **Memory ordering:** How the CPU sees the current state of the world
-2. **Atomic instructions:** special CPU instructions concerning only one specific memory location
-
-We'll start with the first concept and then progress to the last.
+**I'll be using one main reference here unless I state otherwise:** [Intel® 64 and IA-32 Architectures Software Developer’s Manual Volume 3A](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf). So when I refer to Chapter x in the Intel Developer manual, I refer to this document.
 {% endhint %}
 
 Let's start at the bottom and work our way up to a better understanding.
 
 _I'll skip compiler reordering since it's pretty easy to understand. Just know that your code most likely will not be compiled chronologically the way you write it. However, this only applies to code that can correctly be reordered. Code that depends on previous steps will of course not be reordered at random._
+
+## Memory ordering vs Atomic instructions <a id="cpu-caches"></a>
+
+A typical atomic operation in rust looks like this:
+
+```rust
+atomic_val.fetch_add(1, Ordering::Relaxed);
+```
+
+There are two things stand out as different from a regular add operation.
+
+1. `fetch_add`is a special method on the atomic type
+2. `Ordering::Relaxed`specifies the memory ordering
+
+Now, to make things clear from the start. Atomic instructions are always atomic. The memory ordering is primarely information to the compiler indicating what it can and can't do.
+
+There is also one more thing to note.
+
+There are two main models for a CPu to treat memory. Either strongly ordered, or weakly ordered. 
+
+Most current desktop CPUs from AMD and Intel uses stron ordering. That means that the CPU itself gives some guarantees about not reordering certaing operations. Some examples of this guarantee can be found in Intels Developer Manual, chapter 8.2.2:
+
+> * Reads are not reordered with other reads.
+> * Writes are not reordered with older reads.
+> * Writes to memory are not reordered with other writes \(with some exceptions\)
+
+There are more guarantees as well, however there is also one important non-guarantee mentioned:
+
+> Reads may be **reordered with older writes to different locations** but not with older writes to the same location
+
+_For now, just remember this non-guarantee._
+
+A weakly ordered CPU can choose to reorder instructions much more loosely. Since the code we write might be compiled to such platforms, the semantics in Rust needs to acommodate for that. Also, the chapter regarding memory ordering does especially apply to weakly ordered platforms since there is more for us to consider on such a system.
+
+
 
 ## CPU Caches <a id="cpu-caches"></a>
 
@@ -50,6 +80,10 @@ These states apply to each cache line in the L1 cache:
 (S) Shared - might exist in other caches. Is current with main memory (clean).
 (I) Invalid - cache line is invalid. Another cache has modified it.
 ```
+
+{% hint style="info" %}
+See chapter 11.4 in [Intels Developer Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf) for more information about the cache states.
+{% endhint %}
 
 Ok, so we can model this for ourselves by thinking that every cache line in the CPU has an enum with four states attached to them.
 
@@ -81,7 +115,7 @@ This mailbox is what's important for us when we're going to talk about atomics l
 
 This mailbox can buffer a certain number of messages. Each message is buffered here to avoid interrupting the CPU all the time and force it to handle every message sent from other cores immediately.
 
- Now, at some point the CPU checks this mailbox \(I've also seen talks about designs which issues an interrupt to the CPU when it needs to process messages\) and updates it's cache accordingly.
+ Now, at some point the CPU checks this mailbox \(I've also seen talks about designs which issues an interrupt to the CPU when it needs to process messages\) and updates its cache accordingly.
 
 Let's take an example of a cache line which is marked as `Shared`. 
 
@@ -93,27 +127,69 @@ The L1 cache on each core then fetches the correct value from main memory \(or L
 It's useful to know that none of these operations by default happens immediately. Both the sending of messages and reading the mailbox can be delayed for an arbitrary amount of time. The processor will by default first focus on performance, secondly on synchronization and cache coherence.
 {% endhint %}
 
-## Memory fences
+## Memory ordering
 
-Now that we have some idea of how the CPUs are designed to coordinate between them, we can talk about different memory orderings and what they mean:
+Now that we have some idea of how the CPUs are designed to coordinate between them, we can talk about different memory orderings and what they mean.
 
-In Rust the memory ordering is represented by the [std::sync::atomic::Ordering](https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html) enum, which has 5 possible values:
+In Rust the memory ordering is represented by the [std::sync::atomic::Ordering](https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html) enum, which has 5 possible values.
+
+{% hint style="info" %}
+On strongly ordered platforms, many of these orderings will emit the same exact code depending on the situation since the CPU has some guarantees we can rely on. However, they will prevent the compiler from doing unexpected reordering of our code which is the important part to know. The memory ordering we want to have is information we give the compiler to make our intentons clear. 
+
+The atomic _instructions_ we use on this memory on the other hand does instruct the CPU to treat operations on this memory in a specific way.
+
+On a weakly ordered system, these semantics might cause different explicit memory fences to be set up.
+{% endhint %}
+
+### A mental model
+
+While this is pretty hard to do in Rust in practice due to it's type system \(we have no way to get a pointer to an `Atomic`for example\), I find it usefull to imagine an observer-core. This observer core is interested in the same memory as we perform atomic operations on for some reason, so we'll divide each model i two. How it looks on the core it's running, and how it looks from an oberver-core.
+
+Remember that Rust inherits its memory model for atomics from C++ 20, and C copies their model from C++ as well. In these languages, mixing atomic operations and "normal" memory access on the same memory is perfectly doable.
 
 ### Relaxed
 
-No messages are forced to be sent or retrieved & processed from the inbox before this operation. This is therefore the weakest of the possible memory orderings. It implies that the operation does not do any specific synchronization with the other CPUs.
+**On the current CPU:**  
+Relaxed memory ordering on atomics will prevent the compiler from reordering these instructions themselves but on weakly ordered CPUs it might reorder all other memory access. It's OK if you only increment a counter but might get you into trouble if you use a flag to implement a spin-lock for example since you can't trust that "normal" memory access before and after the flag is set, is not reordered.
+
+**On the observer CPU:**  
+Any [locked](./#the-lockcpu-instruction-prefix) atomic operation on any memory location triggers the cache coherency mechanism and will force the observer cores L1 cache to update this memory location as well so at that point, the observer core will see the new value. However, a `Atomic::store`on itself is not a locking operation so unless the observer core has processed it's "mailbox" it is perfectly possible to fetch an outdated value from the cache. Since the compiler might reorder any other memory as well, the observer thread might observe operations in a different order than the "program order" \(as we wrote them\).
+
+This is therefore the weakest of the possible memory orderings. It implies that the operation does not do any specific synchronization with the other CPUs.
+
+{% hint style="info" %}
+One caveat is that on strongly ordered systems, these operations will most likely be run in the same manner as with `Acquire/Release`. Proving or observing any differences on such a system might be impossible. However, on weakly ordered systems, this will matter. 
+
+Take a [look at this article](https://preshing.com/20121019/this-is-why-they-call-it-a-weakly-ordered-cpu/) where they run the same code on both a strongly ordered CPU and a weakly ordered CPU to see the differences.
+{% endhint %}
 
 ### Acquire
 
-All messages in the inbox of the current CPU are read and processed before the next operation. This means that all cache lines any other CPU has modified, is marked as `Invalid`meaning that we'll need to fetch new values from memory if our operation involves reading such a value. For this exact reason, `Acquire`only makes sense in _load_ operations. **Most** **`atomic`methods in rust which involves stores will panic if you pass inn** **`Acquire`as the memory ordering of a** **`store`operation.**
+**On the current CPU:**  
+Any memory operation \(that means anything manipulating memory locations, not only `Atomics`in Rust\) that is written after the `Acquire`access stays after it. It's meant to be paired with a `Release`memory ordering flag. Any locking operation will still be visible on all other threads.
+
+**On the observer CPU:**  
+Any locking operation on the `Atomic`type in Rust will be visible due to the cache coherency mechanism. However, as with `Relaxed`, `Atomic::store`is not a locking operation. However, the observing core will never see any memory operation written after a locking `Acquire`operation happen before it. 
+
+`Acquire` is often used to write locks, where some operations need to stay after the successfull aquisition of the lock. For this exact reason, `Acquire`only makes sense in _load_ operations. **Most** **`atomic`methods in rust which involves stores will panic if you pass inn** **`Acquire`as the memory ordering of a** **`store`operation.**
 
 ### Release
 
-All pending messages on the CPU are flushed and sent to the other CPUs mailboxes before we perform the next operation. This is most likely values which was `Shared`but we have been modified, so they're now marked as `Modified`in the cache of the current CPU. Before we proceed with any operation, we flush the changes made to main memory and sends a message to all the other cores that they'll need to mark this cache line as `Invalid`. `Release`memory ordering only makes sense on `store`operation. **For this reason, and opposite of the** **`Acquire`ordering, most** **`load`methods in Rust will panic if you pass in a** **`Release`ordering.**
+**On the current CPU:**  
+In contrast to `Acquire`, any memory operation written before the `Release`memory ordering flag stays before it. It's meant to be paired with an `Acquire`memory ordering flag. As with Atomics. Any locking operation will still be visible on all other threads, but often a `Release`store will be non-locking, on weakly ordered CPUs it might however insert a [memory fence](https://doc.rust-lang.org/std/sync/atomic/fn.fence.html) to assert that the CPU doesn't reorder these instructions since they're non-locking \(which means reordering is something the CPU might do\). This is partially what makes it weaker than `SeqCst`but also more performant.
+
+**On the observer CPU:**  
+Any locking operation on the `Atomic`type in Rust will be visible due to the cache coherency mechanism. However, as with `Relaxed`, `Atomic::store`is not a locking operation. However, the observing core will never see any memory operation written before a locking `Acquire`operation happen after it. 
+
+`Release` is often used together with `Acquire`to write locks. For a lock to function some operations need to stay after the successfull aquisition of the lock, but before the lock is released.  **For this reason, and opposite of the** **`Acquire`ordering, most** **`load`methods in Rust will panic if you pass in a** **`Release`ordering.**
 
 ### AcqRel
 
-First process all messages in the inbox \(as we do in `Acquire`\), then flush changes and notify the other CPUs, so they can update their caches \(as we do in `Release`\).
+This is intended to be used on on operations which both loads and stores a value. On strongly ordered systems, this is most likely the default behavior, but on weakly ordered systems a memory fence might be used to prevent the compiler from reordering the instructions. This operation acts more or less like a fence in Rust. Memory operations that is written before it will not me reordered across this boundary, and memory operations which is written after it will not be reordered before it.
+
+{% hint style="info" %}
+It's woth noting that `Acquire/Release`often comes for free on strongly ordered systems, so there is absolutely no extra cost of using this kind of memory ordering.
+{% endhint %}
 
 ### SeqCst
 
@@ -131,11 +207,13 @@ Make sure you have selected `Release`as build option and the choose `Show Assemb
 
 The code is pretty simple. We aquire a flag and change it atomically, and when successfull we increase a counter \(un-atomically\), and then we change the flag back. The complexity here stems from having a smart compiler that insists on pre-caclulating everything on `release`builds and basically change the program dramatically.
 
-If we first load a value using `Acquire` \(thereby forcing our core to process all incoming messages\) we know we have an updated view on **all** memory.  We then atomically change the the flag using an atomic instruction. 
+If we first load our flag using a locking instruction \(which `compare_and_swap`is\) we know that we have an updated view on **all** memory and that any modifications we do are visible in the L1 caches where it's referenced \(this memory location is invalid now, so it will be fetched from memory on next access\).
 
-Using this special instruction we know that all other cores will have this value invalidated in their caches \(I'll explain a bit more [below](./#now-what-does-this-lockinstruction-prefix-do)\) when we're done. 
+{% hint style="info" %}
+The observer thread will also see this as the first thing that happens.
+{% endhint %}
 
-If we later on just store a new value and change this same flag \(which doesn't require us to read the most current memory value\), the `store`operation doesn't need to happen atomically at all since we know that the next time this value will be read, the `Aquire`memory fence will see our updated value.
+When we later on use a store operstion to change this flag back \(which doesn't require us to read the most current memory value\), the `store`operation doesn't need to happen atomically at all since we know that the next time this value will be read, the locking instruction will make sure we read the updated value.
 
 **The outputted assembly using `Acquire/Release`will look like this:**
 
@@ -148,37 +226,57 @@ movq	%r12, playground::COUNTER(%rip)
 movb	$0, playground::LOCKED(%rip)
 ```
 
-If this means nothing to you, just note that `lock cmpxchgb`is an _atomic_ operation, it reads a flag and changes it's calue if a certain condition is met. 
+If this means nothing to you, just note that `lock cmpxchgb`is an [_locking_ ](./#the-lockcpu-instruction-prefix)operation, it reads a flag and changes it's value if a certain condition is met. 
 
-This operation will involve the CPU's [cache coherency mechanism](https://en.wikipedia.org/wiki/Cache_coherence) to make sure no other CPU accesses this data in their caches and once it's updated, all other instances in other caches is `Invalidated`. 
-
-Now the store operation which used `Release`memory ordering is movb `$0, playground::LOCKED(%rip)`which is not an atomic opeation at all. We know that the next time this value is read, it's using `Aquire`so the message sent to other CPUs about the change will be visible.
-
-However, if someone were to make a load of that memory location without any menory barrier, they might not see our updated value.
+This operation will involve the CPU's [cache coherency mechanism](https://en.wikipedia.org/wiki/Cache_coherence) to make sure no other CPU accesses this data in their caches and once it's updated, all other instances in other caches is `Invalidated`. This instruction also makes sure our cache is current when we start the operation \(all messages processed\).
 
 {% hint style="info" %}
-Allowing the compiler to reason like this is why `AcqRel`is considered a _weaker_ memory ordering than `SeqCst`.
+This can be derived from chapter 8.2.5 in [Intels Developer Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf) which states:
+
+> Synchronization mechanisms in multiple-processor systems may depend upon a strong memory-ordering model. Here, a program can use a locking instruction such as the XCHG instruction or the LOCK prefix to ensure that a read-modify-write operation on memory is carried out atomically. Locking operations typically operate like I/O operations in that they wait for all previous instructions to complete and for all buffered writes to drain to memory \(see Section 8.1.2, “Bus Locking”\).
 {% endhint %}
 
-**If we instead use `SeqCst`we get this output:**
+Now the store operation which used `Release`memory ordering is `movb $0, playground::LOCKED(%rip)` which is not an atomic opeation at all. We know that the next time this value is read on another CPU which use `Acuire/Release`on this memory they will see the change since they use a [locked](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf) instruction which makes sure the result of that write operation is visible in all caches.
+
+{% hint style="info" %}
+The observing core \(or any other core for that matter\) might not get a perfectly chronological view of events. If two cores are acquiring and releasing this flag. The observer core might see thread 1 change the flag to `true`, then core 2 set the flag to `true`and then both core 1 and core 2 setting the flag to false.
+
+There is no agreement on which order these events happen since the `mov`instruction is a normal store and thereby, each core will only get notified through their "mailbox". The mailbox remember, will in time give information about what has happened, but not in any order we can rely on.
+{% endhint %}
+
+If we change our `test` function in the code I linked to in the playground to:
 
 ```rust
-lock		cmpxchgb	%r14b, playground::LOCKED(%rip) # compare_excange
+pub fn test(inc: usize) -> usize {
+    while LOCKED.compare_and_swap(false, true, Ordering::SeqCst) {}
+    unsafe { COUNTER += inc };
+    LOCKED.store(false, Ordering::SeqCst);
+    unsafe { COUNTER }
+}
+```
+
+We get the following assembly output:
+
+```rust
+xorl	%eax, %eax
+lock		cmpxchgb	%r14b, playground::LOCKED(%rip)
 jne	.LBB0_2
 movq	playground::COUNTER(%rip), %r12
 addq	$1, %r12
 movq	%r12, playground::COUNTER(%rip)
 xorl	%eax, %eax
-xchgb	%al, playground::LOCKED(%rip)               # store
+xchgb	%al, playground::LOCKED(%rip)    # notice this
 ```
 
-The insteresting change here is the store operation `xchgb %al, playground::LOCKED(%rip)`. In contrast to the `mov`operation we had previously, this is an atomic operation \(`xchg`has an [implicit `lock`prefix](https://en.wikibooks.org/wiki/X86_Assembly/Data_Transfer)\). 
+The insteresting change here is the store operation `xchgb %al, playground::LOCKED(%rip)`. In contrast to the `mov`operation we had previously, this is an atomic operation \(`xchg`has an [implicit `lock`prefix](https://en.wikibooks.org/wiki/X86_Assembly/Data_Transfer)\).  
 
-Now since the store operation is atomic, all cahces will be locked and updated with the new value for this exact memory location, so any read of this value on other cores will be visible as soon as it's changed even though no memory fence is used.
+Since the `xchg`instruction is a [locked ](./#the-lockcpu-instruction-prefix)instruction when it refers to memory \(see chapter 8.1.2.1 in [Intels Developer Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf)\),  it will make sure all cache lines on other cores referring to the same memory is invalidated.
 
-If we have a core which only observes this memory location, we can have a situation using `Acquire/Release`in which the observer risk "missing" a change or get them in the wrong order.
+{% hint style="info" %}
+For our observing core this is a big change. Since the store operation is also a `locking` instruction in this case, the cache coherence mechanism will invalidate the value we have in the L1 cache, so the next time we read it it will fetch the updated value from memory.
 
-Using `SeqCst`we know that the cache of the observing core will be updated on both operations event though it's not needed for our program to finction correctly.
+So the observer will see core 1 change the flag to `true`, then later on change it back to `false`, and the same for core 2. In fact, all threads that uses this memory location will observe the changes in a sequentially constistent order.
+{% endhint %}
 
 One important thing to note is that if there is any `Acquire`, `Release`or `Relaxed`operations on this memory, the sequential consistency is lost since there is no way to know when that operation happened and thereby agree on a total order of operations.
 
@@ -186,14 +284,6 @@ One important thing to note is that if there is any `Acquire`, `Release`or `Rela
 
 {% hint style="info" %}
 You can see an example of why above since every atomic instruction has an overhead of involving the CPUs [cache coherency mecanism](https://en.wikipedia.org/wiki/Cache_coherence) and locking the memory location in the other caches. The fewer such instructions we need while still having a correct program, the better performance.
-{% endhint %}
-
-I have a hard time coming up with a good example where this ordering is the only one that solves a certain problem. Most synchronization can be solved by using the weaker orderings.
-
-_However, reasoning about_ _`Acquire`and_ _`Release`in complex scenarios can be hard. If you only use_ _`SeqCst`on a part of memory you'll know that you have the strongest memory ordering and you're likely on the "safe side". It makes working with atomics a lot more convenient._
-
-{% hint style="info" %}
-Since these synchronizations only concerns memory and how the CPU "sees the world" at the time of an operation we call  them `memory fences`or `memory barriers`.
 {% endhint %}
 
 ## The `lock`CPU instruction prefix
@@ -214,15 +304,15 @@ Its a good time to remind yourself now that `atomic`types is not something the C
 
 It can quickly become a bit technical, but as far as I understand it, an easy way to model this is that it sets the cache line state to `Modified`already when the memory is fetched from the cache. 
 
-This way, from the moment it's fetched from a cores L1 cache it's marked as `Modified` . The processor uses it's [cache coherence mechanism](https://en.wikipedia.org/wiki/Cache_coherence) to make sure the state is updated to `Invalid`on all other caches where it exists - even though they've not yet process all of their messages in their mailboxes yet.
+This way, from the moment it's fetched from a cores L1 cache it's marked as `Modified` . The processor uses its [cache coherence mechanism](https://en.wikipedia.org/wiki/Cache_coherence) to make sure the state is updated to `Invalid`on all other caches where it exists - even though they've not yet process all of their messages in their mailboxes yet.
+
+If message passing is the normal way of synchonizing changes, the `locked`instruction \(and other memory-ordering or serializing instructions\) involves a more expensive and more powerfull mechanism which bypasses the message passing, locks the cache lines on the other caches \(so no load or store operation can happen when it's in progress\) and sets them as invalid accordingly which forces the cache to fetch an updated value from memory.
 
 {% hint style="info" %}
 If you're interested in reading more about this then take a look at chapter 8 of the [Intel® 64 and IA-32 Architectures Software Developer’s Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf).
 {% endhint %}
 
 If you consider a "normal" add operation, the `load`operation does not change the state of the cache line. First when the "add" operation is completed the state of this cache line in the L1 cache is changed.
-
-If you see this in relation to the memory fences discussed above you can understand why this subtle change matters.
 
 {% hint style="info" %}
 A cache line is most often 64 bytes on a 64 bit system. This can vary based on the exact CPU, but what is important to consider is that the locking mechanisms used if a memory crosses two cache lines is much more expensive and might involve bus locking and other hardware techniques.
