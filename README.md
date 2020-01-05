@@ -24,7 +24,12 @@ I don't think the CPU knows in advance exactly how it's going to run your code e
 {% hint style="warning" %}
 The problem atomics solve are related to memory loads and stores. Any reordering of instructions which does not operate on shared memory has no impact we're concerned about here.
 
-One more thing to note is that I consciously use multi processor or multi core programming, instead of multi `threaded`programming. While related in practice on most systems today, _most_ of this book will **not** apply on a _multithreaded_  but _single core_ system.
+**We can divide the subject of atomics into two parts:**
+
+1. **Memory ordering:** How the CPU sees the current state of the world
+2. **Atomic instructions:** special CPU instructions concerning only one specific memory location
+
+We'll start with the first concept and then progress to the last.
 {% endhint %}
 
 Let's start at the bottom and work our way up to a better understanding.
@@ -112,22 +117,83 @@ First process all messages in the inbox \(as we do in `Acquire`\), then flush ch
 
 ### SeqCst
 
-Same as `AcqRel`but it also preserves a sequentially consistent order between operations that are marked with `SeqCst`. It's a bit hard to understand, but think of it like special messages which are marked with a timestamp.
+Same as `AcqRel`but it also preserves a sequentially consistent order between operations that are marked with `SeqCst`. It's a bit hard to understand, but it's a good segway to our next topic concerning `atomic instructions`.
 
-The timestamp is only attached with messages sent to us from a CPU which did an `AcqRel`as a part of `SeqCst`. We only read this timestamp if we are performing a `AcqRel`as a part of a `SeqCst`operation ourselves, and we order these messages chronologically based on their timestamp.
+Let's consider `SeqCst` in contrast to an `Acquire/Release`operation.
 
-If we have three cores, A, B and C. All performing `SeqCst`operations on the same memory. Since all of them sort the messages chronologically , they will all read the messages in the order from first to last. The three cores can thereby agree on what happened in which order.
+**I'll use this playground example to explain:**
+
+{% embed url="https://play.rust-lang.org/?version=stable&mode=release&edition=2018&gist=7548a9c7c4e59c0e8d6fafd46e093e67" %}
+
+{% hint style="info" %}
+Make sure you have selected `Release`as build option and the choose `Show Assembly`. The relevant part of the assembly is outputted in section `LBB0_2`using the current compiler \(1.40\) so you can search for that.
+{% endhint %}
+
+The code is pretty simple. We aquire a flag and change it atomically, and when successfull we increase a counter \(un-atomically\), and then we change the flag back. The complexity here stems from having a smart compiler that insists on pre-caclulating everything on `release`builds and basically change the program dramatically.
+
+If we first load a value using `Acquire` \(thereby forcing our core to process all incoming messages\) we know we have an updated view on **all** memory.  We then atomically change the the flag using an atomic instruction. 
+
+Using this special instruction we know that all other cores will have this value invalidated in their caches \(I'll explain a bit more [below](./#now-what-does-this-lockinstruction-prefix-do)\) when we're done. 
+
+If we later on just store a new value and change this same flag \(which doesn't require us to read the most current memory value\), the `store`operation doesn't need to happen atomically at all since we know that the next time this value will be read, the `Aquire`memory fence will see our updated value.
+
+**The outputted assembly using `Acquire/Release`will look like this:**
+
+```rust
+lock		cmpxchgb	%r14b, playground::LOCKED(%rip)
+jne	.LBB0_2
+movq	playground::COUNTER(%rip), %r12
+addq	$1, %r12
+movq	%r12, playground::COUNTER(%rip)
+movb	$0, playground::LOCKED(%rip)
+```
+
+If this means nothing to you, just note that `lock cmpxchgb`is an _atomic_ operation, it reads a flag and changes it's calue if a certain condition is met. 
+
+This operation will involve the CPU's [cache coherency mechanism](https://en.wikipedia.org/wiki/Cache_coherence) to make sure no other CPU accesses this data in their caches and once it's updated, all other instances in other caches is `Invalidated`. 
+
+Now the store operation which used `Release`memory ordering is movb `$0, playground::LOCKED(%rip)`which is not an atomic opeation at all. We know that the next time this value is read, it's using `Aquire`so the message sent to other CPUs about the change will be visible.
+
+However, if someone were to make a load of that memory location without any menory barrier, they might not see our updated value.
+
+{% hint style="info" %}
+Allowing the compiler to reason like this is why `AcqRel`is considered a _weaker_ memory ordering than `SeqCst`.
+{% endhint %}
+
+**If we instead use `SeqCst`we get this output:**
+
+```rust
+lock		cmpxchgb	%r14b, playground::LOCKED(%rip) # compare_excange
+jne	.LBB0_2
+movq	playground::COUNTER(%rip), %r12
+addq	$1, %r12
+movq	%r12, playground::COUNTER(%rip)
+xorl	%eax, %eax
+xchgb	%al, playground::LOCKED(%rip)               # store
+```
+
+The insteresting change here is the store operation `xchgb %al, playground::LOCKED(%rip)`. In contrast to the `mov`operation we had previously, this is an atomic operation \(`xchg`has an [implicit `lock`prefix](https://en.wikibooks.org/wiki/X86_Assembly/Data_Transfer)\). 
+
+Now since the store operation is atomic, all cahces will be locked and updated with the new value for this exact memory location, so any read of this value on other cores will be visible as soon as it's changed even though no memory fence is used.
+
+If we have a core which only observes this memory location, we can have a situation using `Acquire/Release`in which the observer risk "missing" a change or get them in the wrong order.
+
+Using `SeqCst`we know that the cache of the observing core will be updated on both operations event though it's not needed for our program to finction correctly.
 
 One important thing to note is that if there is any `Acquire`, `Release`or `Relaxed`operations on this memory, the sequential consistency is lost since there is no way to know when that operation happened and thereby agree on a total order of operations.
 
 **SeqCst is the strongest of the memory orderings, it also has a slightly higher cost than the others.**
+
+{% hint style="info" %}
+You can see an example of why above since every atomic instruction has an overhead of involving the CPUs [cache coherency mecanism](https://en.wikipedia.org/wiki/Cache_coherence) and locking the memory location in the other caches. The fewer such instructions we need while still having a correct program, the better performance.
+{% endhint %}
 
 I have a hard time coming up with a good example where this ordering is the only one that solves a certain problem. Most synchronization can be solved by using the weaker orderings.
 
 _However, reasoning about_ _`Acquire`and_ _`Release`in complex scenarios can be hard. If you only use_ _`SeqCst`on a part of memory you'll know that you have the strongest memory ordering and you're likely on the "safe side". It makes working with atomics a lot more convenient._
 
 {% hint style="info" %}
-Since these synchronizations happen before the next operation, and we force the core we're currently running on to synchronize it's cache with the other cores we call these operations `memory fences`or `memory barriers`.
+Since these synchronizations only concerns memory and how the CPU "sees the world" at the time of an operation we call  them `memory fences`or `memory barriers`.
 {% endhint %}
 
 ## The `lock`CPU instruction prefix
@@ -138,7 +204,7 @@ From [Implementing Scalable Atomic Locks for Multi-Core Intel® EM64T and IA32 A
 
 _User level locks involve utilizing the atomic instructions of processor to atomically update a memory space. The atomic instructions involve utilizing a lock prefix on the instruction and having the destination operand assigned to a memory address. The following instructions can run atomically with a lock prefix on current Intel processors: ADD, ADC, AND, BTC, BTR, BTS, CMPXCHG, CMPXCH8B, DEC, INC, NEG, NOT, OR, SBB, SUB, XOR, XADD, and XCHG..._
 
-Ok, so when we use the methods on atomics like `fetch_add`on [AtomicUsize](https://doc.rust-lang.org/std/sync/atomic/struct.AtomicUsize.html) it actually the the assembly would instead look something like \(an AT&T dalect\) `lock addq ..., ...`instead of `addq ..., ...`which we'd normally expect.
+Ok, so when we use the methods on atomics like `fetch_add`on [AtomicUsize](https://doc.rust-lang.org/std/sync/atomic/struct.AtomicUsize.html) it actually changes the instructions we use to add the two numbers on the CPU. The the assembly would instead look something like \(an AT&T dalect\) `lock addq ..., ...`instead of `addq ..., ...`which we'd normally expect.
 
 {% hint style="info" %}
 Its a good time to remind yourself now that `atomic`types is not something the CPU knows about. An `AtomicUsize`will be represented by a regular `usize`in the CPU. It's the methods and types on the `atomic`which emits different CPU instructions that matter.
@@ -146,7 +212,13 @@ Its a good time to remind yourself now that `atomic`types is not something the C
 
 ### Now what does this `lock`instruction prefix do?
 
-It can quickly become a bit technical, but as far as I understand it, an easy way to model this is that it sets the cache line state to `Modified`already when the memory is fetched from the case. This way, from the moment it's fetched from a cores L1 cache it's marked as `Modified`and a message to `invalidate`it in the other caches is sent.
+It can quickly become a bit technical, but as far as I understand it, an easy way to model this is that it sets the cache line state to `Modified`already when the memory is fetched from the cache. 
+
+This way, from the moment it's fetched from a cores L1 cache it's marked as `Modified` . The processor uses it's [cache coherence mechanism](https://en.wikipedia.org/wiki/Cache_coherence) to make sure the state is updated to `Invalid`on all other caches where it exists - even though they've not yet process all of their messages in their mailboxes yet.
+
+{% hint style="info" %}
+If you're interested in reading more about this then take a look at chapter 8 of the [Intel® 64 and IA-32 Architectures Software Developer’s Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf).
+{% endhint %}
 
 If you consider a "normal" add operation, the `load`operation does not change the state of the cache line. First when the "add" operation is completed the state of this cache line in the L1 cache is changed.
 
