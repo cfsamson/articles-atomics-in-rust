@@ -138,12 +138,12 @@ Remember that Rust inherits its memory model for atomics from C++ 20, and C copi
 Relaxed memory ordering on atomics will prevent the compiler from reordering these instructions themselves but on weakly ordered CPUs it might reorder all other memory access. It's OK if you only increment a counter but might get you into trouble if you use a flag to implement a spin-lock for example since you can't trust that "normal" memory access before and after the flag is set, is not reordered.
 
 **On the observer CPU:**  
-Any [locked](./#the-lockcpu-instruction-prefix) atomic operation on any memory location triggers the cache coherency mechanism and will force the observer cores L1 cache to update this memory location as well so at that point, the observer core will see the new value. However, a `Atomic::store`on itself is not a locking operation so unless the observer core has processed it's "mailbox" it is perfectly possible to fetch an outdated value from the cache. Since the compiler might reorder any other memory as well, the observer thread might observe operations in a different order than the "program order" \(as we wrote them\).
+Both the compiler and the CPU are free to reorder any other memory access except from switching two `Relaxed`load/stores whith eachother. The observer coremight observe operations in a different order than the "program order" \(as we wrote them\). They will hovever always see `Relaxed`operation A before `Relaxed` operation B if we wrote them in that order.
 
-This is therefore the weakest of the possible memory orderings. It implies that the operation does not do any specific synchronization with the other CPUs.
+`Relaxed` is therefore the weakest of the possible memory orderings. It implies that the operation does not do any specific synchronization with the other CPUs.
 
 {% hint style="warning" %}
-On a strongly ordered CPU all memory operations is said to have Acquire/Release semantics by default.
+On a strongly ordered CPU all memory operations is said to have Acquire/Release semantics by default. Therefore this only serves as a hint to the compiler that these operations can't be reordered amongst themselves. The reason for using these operations on a stronly ordered system is that they allow for the compiler to reorder all other memory accesses as it sees fit.
 
 If you wonder why you seem to be able to use `Relaxed`and get the same result as you do with `Acquire/Release`this is the reason. However, it's important to try to understsand the "abstract machine" model and not only rely on experience you get by running experiments on a strongly ordered CPU. Your code might break on a different CPU.
 
