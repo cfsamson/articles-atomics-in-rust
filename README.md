@@ -337,14 +337,14 @@ retq
 
 The interesting change here is the store operation which is now changed from a simple load to a special instruction `xchgb %al, example::X.0.0(%rip)`. This is an _atomic operation_ \(`xchg`has an [implicit `lock`prefix](https://en.wikibooks.org/wiki/X86_Assembly/Data_Transfer)\).
 
-Since the `xchg`instruction is a [locked ](./#the-lockcpu-instruction-prefix)instruction when it refers to memory it will make sure all cache lines on other cores referring to the same memory is invalidated. In addition it works as a full memory fence which we can derive from capter 8.2.3.9 in the [Intel Developer Manua](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf)l:
+Since the `xchg`instruction is a [locked ](./#the-lockcpu-instruction-prefix)instruction \(when it refers to memory\) it will make sure all cache lines on other cores referring to the same memory is locked when the memory is fetched and then invalidated after the modification. In addition it works as a full memory fence which we can derive from capter 8.2.3.9 in the [Intel Developer Manua](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf)l:
 
 > 8.2.3.9 Loads and Stores Are Not Reordered with Locked Instructions
 >
 > The memory-ordering model prevents loads and stores from being reordered with locked instructions that execute earlier or later. The examples in this section illustrate only cases in which a locked instruction is executed before a load or a store. The reader should note that reordering is prevented also if the locked instruction is executed after a load or a store.
 
 {% hint style="info" %}
-For our observing core this is a big change.
+For our observing core this is a noticable change.
 
 **Sequential Consistency**
 
@@ -356,7 +356,7 @@ Using the locking instruction prevents this. So in addition to have `Acquire/Rel
 
 On a weakly ordered CPU, CeqCst also gives some guarantees which we get by default on a strongly ordered CPU, most importantly a _single total modification order_.
 
-That means that if we have two observing cores, they will see all `CeqCst`operations in the same order. `Acquire/Release` does not give this guarantee. Observer 1 cold see the two canges in a different order than observer B \(remember the mailbox analogy\).
+That means that if we have two observing cores, they will see all `CeqCst`operations in the same order. `Acquire/Release` does not give this guarantee. Observer 1 could see the two canges in a different order than observer B \(remember the mailbox analogy\).
 
 Let's say core 1 acquires a flag X using `compare_and_swap`using Acquire ordering, and core 2 does the same on Y. Both do the same operations and then change the flag value back using `Release`store.
 
