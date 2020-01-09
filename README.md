@@ -31,7 +31,7 @@ Let's start at the bottom and work our way up to a better understanding.
 
 ## Strong vs Weak Memory Ordering
 
-So to start off, we need to get some concepts right. CPUs give different guarantees when it comes to how it treats memory. We can classify them from Weak to Strong. However, it's not a precise specification so there are models which is somwhere in between.
+So to start off, we need to get some concepts right. CPUs give different guarantees when it comes to how it treats memory. We can classify them from Weak to Strong. However, it's not a precise specification so there are models which is somewhere in between.
 
 To abstract over these differences, Rust has the concept of an [abstract machine](http://www.stroustrup.com/abstraction-and-machine.pdf). It borrows this model from C++. This abstract machine needs to be an abstraction which makes it possible to program against weak and string CPUs \(and everything in between\).
 
