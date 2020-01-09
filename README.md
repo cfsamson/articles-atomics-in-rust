@@ -33,13 +33,13 @@ Let's start at the bottom and work our way up to a better understanding.
 
 So to start off, we need to get some concepts right. CPUs give different guarantees when it comes to how it treats memory. We can classify them from Weak to Strong. However, it's not a precise specification so there are models which is somewhere in between.
 
-To abstract over these differences, Rust has the concept of an [abstract machine](http://www.stroustrup.com/abstraction-and-machine.pdf). It borrows this model from C++. This abstract machine needs to be an abstraction which makes it possible to program against weak and string CPUs \(and everything in between\).
+To abstract over these differences, Rust has the concept of an [abstract machine](http://www.stroustrup.com/abstraction-and-machine.pdf). It borrows this model from C++. This abstract machine needs to be an abstraction which makes it possible to program against weak and strong CPUs \(and everything in between\).
 
 You see, the [C++ abstract machine](https://people.mpi-sws.org/~viktor/papers/cpp2015-invited.pdf) specifies many ways to access memory. It kind of have to if we're supposed to use the same semantics for weak and strong processors in the same language.
 
 A CPU with a strong memory model gives some important guarantees that makes much of the semantics we use in the abstract machine no-ops. It does nothing fancy at all, and is only a hint to the compiler to not change the order of memory operations from what we as programmers wrote.
 
-On a weak system however, it might need to set up memory fences or use special instructions to prevent synchronization issues. The best way to learn this abstract machine using experiments would be using a CPU with a weak ordering. However, since most programmers program on a CPU with a strong model, we'll just have to point out the differences so we understand why the semantics is the way they are.
+On a weak system however, it might need to set up memory fences or use special instructions to prevent synchronization issues. The best way to learn this abstract machine using experiments would be using a CPU with a weak ordering. However, since most programmers program on a CPU with a strong model, we'll just have to point out the differences so we understand why the semantics are the way they are.
 
 Most current desktop CPUs from AMD and Intel uses strong ordering. That means that the CPU itself gives some guarantees about not reordering certain operations. Some examples of this guarantee can be found in [Intels Developer Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf), chapter 8.2.2:
 
@@ -155,20 +155,20 @@ Take a [look at this article](https://preshing.com/20121019/this-is-why-they-cal
 **On the current CPU:**  
 Any memory operation written after the `Acquire`access stays after it. It's meant to be paired with a `Release`memory ordering flag forming a sort of a "memory sandwich". All memory access between the load and store will be synchonized with the other CPUs.
 
-On weakly ordered systems, this might result in using special CPU instructions before the `Acqure`operation, which forces the current core to process all messages in it's mailbox \(many CPUs has both serializing and memory ordering instructions\). A _memory fence_ will most likely also be implemented to prevent the CPU from The Acquire operation will therefor be synchonized with modifications on memory done on the other CPUs.
+On weakly ordered systems, this might result in using special CPU instructions before the `Acqure`operation, which forces the current core to process all messages in it's mailbox \(many CPUs has both serializing and memory ordering instructions\). A _memory fence_ will most likely also be implemented to prevent the CPU from reordering memory access before the `Acquire` load. The Acquire operation will therefore be synchonized with modifications on memory done on the other CPUs.
 
 {% hint style="info" %}
 Memroy fences
 
-Since this is the first time we encounter this term, let's not leave that assumming everybody knows what this is. Memory fences are **hardware** concepts. It prevents the CPU from reordering instructions by forcing it to finish loads/stores to and from memory before the fence. Thereby making sure no such operation _before_ the fence is reordered with any such operation _after_ it.
+Since this is the first time we encounter this term, let's not leave that alone assumming everybody knows what this is. Memory fences are **hardware** concepts. It prevents the CPU from reordering instructions by forcing it to finish loads/stores to and from memory before the fence. Thereby making sure no such operation _before_ the fence is reordered with any such operation _after_ it.
 
-Depending on if the instruction only regards reads, writes or both they can have different names. A fence preventing both from beeing reorderd is called a full fence.
+To be able to separate between instructions only regarding reads, writes or both they're called different names. A fence preventing both from beeing reorderd is called a full fence.
 
-Let's take a quick look at some documentation from Intels Developer Manual for one such full fence. \(it's abrreviated, and emphasis is mine\)
+Let's take a quick look at some documentation from [Intels Developer Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf) for one such full fence. \(it's abrreviated, and emphasis is mine\)
 
-> Program synchronization can also be carried out with serializing instructions \(see Section 8.3\). These instructions are typically used at critical procedure or task boundaries to force completion of all previous instructions before a jump to a new section of code or a context switch occurs. Like the I/O and locking instructions, the processor waits until all previous instructions have been completed and all buffered writes have been drained to memory before executing the serializing instruction.The SFENCE, LFENCE, and MFENCE instructions provide a performance-efficient way of ensuring load and store memory ordering between routines that produce weakly-ordered results and routines that consume that data.
+> Program synchronization can also be carried out with serializing instructions \(see Section 8.3\). These instructions are typically used at critical procedure or task boundaries to force completion of all previous instructions before a jump to a new section of code or a context switch occurs. Like the I/O and locking instructions, the processor **waits until all previous instructions have been completed** and **all buffered writes have been drained to memory** before executing the serializing instruction.The SFENCE, LFENCE, and MFENCE instructions provide a performance-efficient way of **ensuring load and store memory ordering** between routines that produce weakly-ordered results and routines that consume that data.
 >
-> MFENCE — Serializes all store and load operations that occurred prior to the MFENCE instruction in the program instruction stream.
+> MFENCE — **Serializes all store and load operations that occurred prior to the MFENCE instruction in the program instruction stream**.
 
 `MFENCE`is such an instruction. You'll find documentation for it throughout chapter 8.2 and 8.3 of [Intels Developer Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf). You won't see these instructions too often on strongy ordered processors since they're rarely needed, but on weakly orderd systems they'll be critical to be able to implement the `Acquire/Release`model used in the abstract machine.
 {% endhint %}
@@ -208,14 +208,14 @@ An observing CPU might not see these changes in any specific order, unless it it
 {% hint style="warning" %}
 On a strongly orderd CPU, all instances of a `Shared` value is invalidated in all L1 caches where it's present before it's modified. That means that the `Acquire`load will already have an updated view of all relevant memory, and a `Release`store will instantly invalidate any cache lines which contain the data on other cores.
 
-Thats why these semantics has no performance cost on sucn a system.
+Thats why these semantics has no performance cost on such a system.
 {% endhint %}
 
 ### AcqRel
 
 This is intended to be used on operations which both loads and stores a value. `AtomicBool::compare_and_swap`is one such operation. Since this operation both loads and stores a value, this could matter on weakly ordered systems in contrast to `Relaxed` operations.
 
-We can think of this operation more or less like a fence. Memory operations that is written before it will not me reordered across this boundary, and memory operations which is written after it will not be reordered before it.
+We can think of this operation more or less like a fence. Memory operations that is written before it will not be reordered across this boundary, and memory operations which is written after it will not be reordered before it.
 
 {% hint style="warning" %}
 Read the `Acquire`and `Release`paragraphs, the same applies here.
@@ -227,9 +227,9 @@ Read the `Acquire`and `Release`paragraphs, the same applies here.
 In this part of this article, I'll talk about this using a strongly ordered CPU as the basis for discussion. You'll not see these "strongly ordered" sections here.
 {% endhint %}
 
-`SeqCst`stands for Sequential Consisstency, gives the same guarantee that `Acquire/Release`does but also promises to establis a single total modification order.
+`SeqCst`stands for Sequential Consisstency, gives the same guarantee that `Acquire/Release`does but also promises to establish a single total modification order.
 
-`SeqCst`has been [critiqued ](https://github.com/rust-lang/nomicon/issues/166)to be slightly flawed and I've seen several [objections ](https://github.com/crossbeam-rs/crossbeam/issues/317)about using it since there seem to be har to prove when you really need it. It has also been critisized for being [slighty broken](https://plv.mpi-sws.org/scfix/paper.pdf).
+`SeqCst`has been [critiqued ](https://github.com/rust-lang/nomicon/issues/166)for being promoted as the recommended ordering to use, and I've seen several [objections ](https://github.com/crossbeam-rs/crossbeam/issues/317)about using it since there seem to be hard to prove that you have a **good** reason for using it. It has also been critisized for being [slighty broken](https://plv.mpi-sws.org/scfix/paper.pdf).
 
 This figure should explain where `SeqCst`might fail in upholding it's guarantees:
 
@@ -282,7 +282,7 @@ Well, to actually point that out we need to take a look at the relevant part of 
 
 > The synchronization is established only between the threads releasing and acquiring the same atomic variable. Other threads can see different order of memory accesses than either or both of the synchronized threads.
 
-Rusts documentation for `Release` re-iterates on that states:
+Rusts documentation for `Release` re-iterates on that and states:
 
 > > ... In particular, all **previous** writes become visible to all threads that perform an [`Acquire`](https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html#variant.Acquire) \(or stronger\) load of this value.
 
@@ -348,7 +348,7 @@ For our observing core this is a noticable change.
 
 **Sequential Consistency**
 
-If we somehow relied on the fact that the value we get from a `load` happens after for example the release of a flag, we could observe that it actually changed before the `Release`operation. At least in theory.
+If we somehow relied on the fact that the value we get from a `load` happens after for example the release of a flag, we could observe that it actually changed before the `Release`operation if we used `Acquire/Release` semantics. At least in theory.
 
 Using the locking instruction prevents this. So in addition to have `Acquire/Release` guarantees, it also guarantees that no other memory operations, **reads** or writes will happen in between.
 
@@ -382,6 +382,26 @@ From [Implementing Scalable Atomic Locks for Multi-Core Intel® EM64T and IA32 A
 _User level locks involve utilizing the atomic instructions of processor to atomically update a memory space. The atomic instructions involve utilizing a lock prefix on the instruction and having the destination operand assigned to a memory address. The following instructions can run atomically with a lock prefix on current Intel processors: ADD, ADC, AND, BTC, BTR, BTS, CMPXCHG, CMPXCH8B, DEC, INC, NEG, NOT, OR, SBB, SUB, XOR, XADD, and XCHG..._
 
 Ok, so when we use the methods on atomics like `fetch_add`on [AtomicUsize](https://doc.rust-lang.org/std/sync/atomic/struct.AtomicUsize.html) it actually changes the instructions we use to add the two numbers on the CPU. The assembly would instead look something like \(an AT&T dialect\) `lock addq ..., ...`instead of `addq ..., ...`which we'd normally expect.
+
+{% hint style="success" %}
+An atomic operation is a set of operations excuted as one indivisible unit. Any observer is prevented form seeing any of the sub operations or acqure the same data while it's beeing operated on. Any conflicting operation B from another core on the same data will have to wait until the the first atomic operation A is finished.
+
+Let's take the simple example of increasing a counter. There are three steps: `load data`, `modify it` and `store data`. 
+
+For each step, another core might change go in and load the same data, modify it and store it back before we're finished.
+
+```text
+LOAD NUMBER
+---- a competing core can load the same value here ----
+INCREASE NUMBER
+---- a competing core can increase the same value ----
+---- a competing core can store their data here ----
+STORE NUMBER
+---- we overwrite that data here ----
+```
+
+Often we want to prevent anyone from observing or interfering from the point we load our data until we store our data. This is exactly what atomic operations solve for us.
+{% endhint %}
 
 A pretty normal use case for atomics is spinlocks. A very simple \(and unsafe\) one could look [like this](https://godbolt.org/z/SfvEVg):
 
