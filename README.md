@@ -115,7 +115,7 @@ If a CPU modifies this cache line, it is invalidated in the other caches. The co
 The L1 cache on each core then fetches the correct value from main memory \(or L2/L3 cache\) and sets its state to `Shared`again.
 
 {% hint style="warning" %}
-On a strongly ordered CPU this model works a slightly different way. If a core modifies a `Shared` cache line, it forces the other cores to invalidate their corresponding cache line before the value is actually modified. such CPUs often have a cache coherency mechanism which changes the state of the caches on each core.
+On a strongly ordered CPU this model works a slightly different way. If a core modifies a `Shared` cache line, it forces the other cores to invalidate their corresponding cache line before the value is actually modified. such CPUs often have a [cache coherency mechanism](https://en.wikipedia.org/wiki/Cache_coherence) which changes the state of the caches on each core.
 {% endhint %}
 
 ## Memory ordering
@@ -223,23 +223,27 @@ Read the `Acquire`and `Release`paragraphs, the same applies here.
 
 ### SeqCst
 
+{% hint style="warning" %}
+In this part of this article, I'll talk about this using a strongly ordered CPU as the basis for discussion. You'll not see these "strongly ordered" sections here.
+{% endhint %}
+
 `SeqCst`stands for Sequential Consisstency, gives the same guarantee that `Acquire/Release`does but also promises to establis a single total modification order.
 
 `SeqCst`has been [critiqued ](https://github.com/rust-lang/nomicon/issues/166)to be slightly flawed and I've seen several [objections ](https://github.com/crossbeam-rs/crossbeam/issues/317)about using it since there seem to be har to prove when you really need it. It has also been critisized for being [slighty broken](https://plv.mpi-sws.org/scfix/paper.pdf).
 
-This figure should explain this problem:
+This figure should explain where `SeqCst`might fail in upholding it's guarantees:
 
 ![https://plv.mpi-sws.org/scfix/paper.pdf](.gitbook/assets/bilde.png)
 
-Ok, so that was a joke. I'll focus on the practical sides of `SeqCst`and not the theoretical fondations of it. Just know that there is a bit of discussion around it, and that most likely `Acquire/Release`will cover most of your challenges, at least on a strongly ordered CPU.
+Got it? Good! We'll focus on the practical sides of `SeqCst`and not the theoretical fondations of it from now on. 
+
+Just know that there is a bit of discussion around it, and that most likely `Acquire/Release`will cover most of your challenges, at least on a strongly ordered CPU.
 
 Let's consider `SeqCst` in contrast to an `Acquire/Release`operation.
 
 **I'll use this Godbolt example to explain:**
 
 {% embed url="https://godbolt.org/z/EFK-qU" caption="" %}
-
-\*\*\*\*
 
 _The code looks like this:_
 
@@ -274,7 +278,7 @@ The store operation which used `Release`memory ordering is `movb %al, example::X
 
 **So what's the problem?**
 
-Well, to actually point that out we need to take at the relevant part of the C++ specification for Release-Acquire:
+Well, to actually point that out we need to take a look at the relevant part of the C++ specification for Release-Acquire:
 
 > The synchronization is established only between the threads releasing and acquiring the same atomic variable. Other threads can see different order of memory accesses than either or both of the synchronized threads.
 
@@ -282,7 +286,7 @@ Rusts documentation for `Release` re-iterates on that states:
 
 > > ... In particular, all **previous** writes become visible to all threads that perform an [`Acquire`](https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html#variant.Acquire) \(or stronger\) load of this value.
 
-An now is the time where we go an get that one non-guarantee made we mentioned in the start. The Intel Developers Manual goes in to a little more detail in chapter 8.2.3.4:
+An now is the time where we go and take a closer look that one _non-guarantee_  I mentioned in the start. The [Intel Developers Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf) goes in to a little more detail in chapter 8.2.3.4:
 
 > 8.2.3.4 Loads May Be Reordered with Earlier Stores to Different Locations
 >
@@ -295,14 +299,14 @@ let x = X.load(Ordering::Acquire);
 X.store(val | x, Ordering::Release); # earlier store to different location
 let y = Y.load(Ordering::Acquire);   # load
 
-// Gets reordered on the CPU to this:
+// *Could* get reordered on the CPU to this:
 
 let x = X.load(Ordering::Acquire);
 let y = Y.load(Ordering::Acquire);
 X.store(val | x, Ordering::Release);
 ```
 
-Now, I've tried my best on my Intel CPU to provoke a situation where this causes a problem, but I have not managed to get a simple example going to reliably show this situation. But in theory, judging by the specs and the description of the abstract machine. `Acquire/Release`doesn't prevet this.
+Now, I've tried my best on my Intel CPU to provoke a situation where this causes a problem, but I have not managed to get a simple example going to reliably showing that. But in theory, judging by the specs and the description of the abstract machine. `Acquire/Release`doesn't prevent this.
 
 If we change our code to:
 
@@ -352,9 +356,9 @@ Using the locking instruction prevents this. So in addition to have `Acquire/Rel
 
 On a weakly ordered CPU, CeqCst also gives some guarantees which we get by default on a strongly ordered CPU, most importantly a _single total modification order_.
 
-That means that if we have two observin cores, they will see all `CeqCst`operations in the same order. `Acquire/Release` does not give this guarantee. Observer 1 cold se two canges in a different order than observer B \(remember the mailbox analogy\).
+That means that if we have two observing cores, they will see all `CeqCst`operations in the same order. `Acquire/Release` does not give this guarantee. Observer 1 cold see the two canges in a different order than observer B \(remember the mailbox analogy\).
 
-Let's say core 1 acquires a flag X using `compare_and_swap`, and core 2 acquires a flag Y using `compare_and_swap` using `Acquire` ordering. Both do the same operations and then change the flag value back using `Release`store.
+Let's say core 1 acquires a flag X using `compare_and_swap`using Acquire ordering, and core 2 does the same on Y. Both do the same operations and then change the flag value back using `Release`store.
 
 There is nothing that prevents Observer 1 seeing the flag Y change back before flag X, and observer 2 the opposite.
 
@@ -370,10 +374,6 @@ You can see an example of why above since every atomic instruction has an overhe
 {% endhint %}
 
 ## Atomic Operations
-
-{% hint style="warning" %}
-On a strongly ordered CPU this operation will involve the [cache coherency mechanism](https://en.wikipedia.org/wiki/Cache_coherence) to make sure no other CPU accesses this data. This instruction also makes sure our cache is current when we start the operation \(all messages processed\).
-{% endhint %}
 
 In addition to the memory fences discussed above, using the atomic types in the `std::sync::atomic`module gives access to some important CPU instructions we normally don't see in Rust:
 
