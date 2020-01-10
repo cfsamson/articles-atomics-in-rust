@@ -450,8 +450,10 @@ If you're interested in reading more about this then take a look at chapter 8 of
 {% hint style="info" %}
 A cache line is most often 64 bytes on a 64 bit system. This can vary based on the exact CPU, but what is important to consider is that the locking mechanisms used if a memory crosses two cache lines is much more expensive and might involve bus locking and other hardware techniques.
 
-Also, atomic operations crossing cache line boundaries have a very varying support based on different architectures. **Presumably this is the major reason that all `atomic`operations is limited to data types smaller or equal to `usize` sized data.**
+Atomic operations crossing cache line boundaries have a very varying support based on different architectures. 
 {% endhint %}
+
+
 
 ## Conclusion
 
