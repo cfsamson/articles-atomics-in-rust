@@ -453,8 +453,6 @@ A cache line is most often 64 bytes on a 64 bit system. This can vary based on t
 Atomic operations crossing cache line boundaries have a very varying support based on different architectures. 
 {% endhint %}
 
-
-
 ## Conclusion
 
 Are you still there? If so, relax now, we're done for today. Thanks for staying with me and reading through, I do sincerely hope you enjoyed it and got some value out of it.
