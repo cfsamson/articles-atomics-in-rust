@@ -126,16 +126,16 @@ In Rust, the memory ordering is represented by the [std::sync::atomic::Ordering]
 
 ### A mental model
 
-While this is pretty hard to do in Rust in practice due to it's type system \(we have no way to get a pointer to an `Atomic` for example\), I find it useful to imagine an observer-core. This observer core is interested in the same memory as we perform atomic operations on for some reason, so we'll divide each model in two: how it looks on the core it's running and how it looks from an observer-core.
+While in practice this is pretty hard to do in Rust due to its type system \(we have no way to get a pointer to an `Atomic` for example\), I find it useful to imagine an observer-core. This observer core is interested in the same memory as we perform atomic operations on for some reason, so we'll divide each model in two: how it looks on the core it's running and how it looks from an observer-core.
 
 {% hint style="success" %}
-Remember that Rust inherits its memory model for atomics from C++ 20, and C copies its model from C++ as well. In these languages, the type system doesn't prevent you in the same way as it does in safe Rust, so accessing an `Atomic`, using a pointer is easier.
+Remember that Rust inherits its memory model for atomics from C++ 20, and C copies its model from C++ as well. In these languages, the type system doesn't constrain you in the same way as it does in safe Rust, so accessing an `Atomic`, using a pointer is easier.
 {% endhint %}
 
 ### Relaxed
 
 **On the current CPU:**  
-Relaxed memory ordering on atomics will prevent the compiler from reordering these instructions themselves but on weakly ordered CPUs it might reorder all other memory access. It's OK if you only increment a counter but might get you into trouble if you use a flag to implement a spin-lock for example, since you can't trust that "normal" memory access before and after the flag is set is not reordered.
+Relaxed memory ordering on atomics will prevent the compiler from reordering these instructions themselves, but, on weakly ordered CPUs, it might reorder all other memory accesses. It's OK if you only increment a counter, but it might get you into trouble if you use a flag to implement a spin-lock for example, since you can't trust that "normal" memory access before and after the flag is set is not reordered.
 
 **On the observer CPU:**  
 Both the compiler and the CPU are free to reorder any other memory access except from switching two `Relaxed` load/stores with each other. The observer core might observe operations in a different order than the "program order" \(as we wrote them\). They will however, always see `Relaxed` operation-A before `Relaxed` operation-B if we wrote them in that order.
@@ -155,14 +155,14 @@ Take a [look at this article](https://preshing.com/20121019/this-is-why-they-cal
 **On the current CPU:**  
 Any memory operation written after the `Acquire` access stays after it. It's meant to be paired with a `Release` memory ordering flag, forming a sort of a "memory sandwich". All memory access between the load and store will be synchronized with the other CPUs.
 
-On weakly ordered systems, this might result in using special CPU instructions before the `Acquire` operation, which forces the current core to process all messages in it's mailbox \(many CPUs have both serializing and memory ordering instructions\). A _memory fence_ will most likely also be implemented to prevent the CPU from reordering memory access before the `Acquire` load. The Acquire operation will therefore be synchronized with modifications on memory done on the other CPUs.
+On weakly ordered systems, this might result in using special CPU instructions before the `Acquire` operation, which forces the current core to process all messages in its mailbox \(many CPUs have both serializing and memory ordering instructions\). A _memory fence_ will most likely also be implemented to prevent the CPU from reordering memory access before the `Acquire` load. The Acquire operation will therefore be synchronized with modifications on memory done on the other CPUs.
 
 {% hint style="info" %}
 Memory fences
 
 Since this is the first time we encounter this term, let's not leave it alone assuming everybody knows what it is. A Memory fence is a **hardware** concept. The memory fence prevents the CPU from reordering instructions by forcing it to finish loads/stores to and from memory before the fence, thereby making sure no such operation _before_ the fence is reordered with any such operation _after_ it.
 
-To be able to separate between instructions only regarding reads, writes, or both, they're called different names. A fence preventing both from being reordered is called a full fence.
+To be able to distinguish between instructions only regarding reads, writes, or both, they're called different names. A fence preventing both from being reordered is called a full fence.
 
 Let's take a quick look at some documentation from [Intels Developer Manual](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf) for one such full fence. \(it's abrreviated, and the emphasis is mine\)
 
@@ -178,7 +178,7 @@ Since `Acquire` is a `load` operation, it doesn't modify memory, there is nothin
 
 However, and there is one caveat, if the observer core itself does an `Acquire` load, it will be able to see all memory operations happening from the `Acquire` load, and to the `Release` store \(including the store\). This means there must be some global synchronization going on. Let's discuss this a bit more in when we talk about `Release`.
 
-`Acquire` is often used to write locks, where some operations need to stay after the successful acquisition of the lock. For this exact reason, `Acquire` only makes sense in _load_ operations. **Most** **`atomic` methods in Rust that involves stores will panic if you pass in** **`Acquire` as the memory ordering of a** **`store` operation.**
+`Acquire` is often used to write locks, where some operations need to stay after the successful acquisition of the lock. For this exact reason, `Acquire` only makes sense in _load_ operations. **Most** **`atomic` methods in Rust that involve stores will panic if you pass in** **`Acquire` as the memory ordering of a** **`store` operation.**
 
 {% hint style="warning" %}
 On strongly ordered CPUs, this will be a no-op and will therefore not incur any cost in terms of performance. It will however prevent the compiler from reordering any memory operations we write _after_ the `Acquire` operation to happen _before_ the `Acquire` operation.
@@ -189,7 +189,7 @@ On strongly ordered CPUs, this will be a no-op and will therefore not incur any 
 **On the current CPU:**  
 In contrast to `Acquire`, any memory operation written before the `Release` memory ordering flag stays before it. It's meant to be paired with an `Acquire` memory ordering flag.
 
-On weakly ordered CPUs it might insert a [memory fence](https://doc.rust-lang.org/std/sync/atomic/fn.fence.html) to assert that the CPU doesn't reorder the memory operations before the `Release` operation so that they happen after it. There is also a guarantee that all other cores which do an `Acquire` must see all memory operations after the `Acquire` and before this `Release`.
+On weakly ordered CPUs the compiler might insert a [memory fence](https://doc.rust-lang.org/std/sync/atomic/fn.fence.html) to ensure that the CPU doesn't reorder the memory operations before the `Release` operation so that they happen after it. There is also a guarantee that all other cores which do an `Acquire` must see all memory operations after the `Acquire` and before this `Release`.
 
 So not only do the operations need to be correctly ordered locally, there is also a guarantee that the changes must be visible to an observing core at this point.
 
@@ -350,7 +350,7 @@ For our observing core this is a noticeable change.
 
 If we somehow relied on the fact that the value we get from a `load` happens after, for example, the release of a flag, we could observe that it actually changed before the `Release` operation if we used `Acquire/Release` semantics. At least in theory.
 
-Using the locking instruction prevents this. So in addition to have `Acquire/Release` guarantees, it also guarantees that no other memory operations, **reads** or writes, will happen in between.
+Using the locking instruction prevents this. So in addition to having `Acquire/Release` guarantees, it also guarantees that no other memory operations, **reads** or writes, will happen in between.
 
 **Single total modification order**
 
@@ -360,7 +360,7 @@ That means that if we have two observing cores, they will see all `SeqCst` opera
 
 Let's say core-1 acquires a flag X using `compare_and_swap` using Acquire ordering, and core-2 does the same on Y. Both do the same operations and then change the flag value back using `Release` store.
 
-There is nothing that prevents Observer-1 seeing the flag-Y change back before flag-X, and observer-2 the opposite.
+There is nothing that prevents Observer-1 from seeing the flag-Y change back before flag-X, and observer-2 the opposite.
 
 `SeqCst` prevents this from happening.
 
@@ -370,7 +370,7 @@ On a strongly ordered system, every `store` is immediately visible on all other 
 **`SeqCst` is the strongest of the memory orderings. It also has a slightly higher cost than the others.**
 
 {% hint style="info" %}
-You can see an example of why above, since every atomic instruction has an overhead of involving the CPU's [cache coherency mechanism](https://en.wikipedia.org/wiki/Cache_coherence) and locking the memory location in the other caches. The fewer such instructions we need while still having a correct program, the better performance.
+You can see an example of why above, since every atomic instruction has an overhead of involving the CPU's [cache coherency mechanism](https://en.wikipedia.org/wiki/Cache_coherence) and locking the memory location in the other caches. The fewer such instructions we need while still having a correct program, the better the performance.
 {% endhint %}
 
 ## Atomic Operations
@@ -381,7 +381,7 @@ From [Implementing Scalable Atomic Locks for Multi-Core Intel® EM64T and IA32 A
 
 _User level locks involve utilizing the atomic instructions of processor to atomically update a memory space. The atomic instructions involve utilizing a lock prefix on the instruction and having the destination operand assigned to a memory address. The following instructions can run atomically with a lock prefix on current Intel processors: ADD, ADC, AND, BTC, BTR, BTS, CMPXCHG, CMPXCH8B, DEC, INC, NEG, NOT, OR, SBB, SUB, XOR, XADD, and XCHG..._
 
-Ok, so when we use the methods on atomics like `fetch_add` on [`AtomicUsize`](https://doc.rust-lang.org/std/sync/atomic/struct.AtomicUsize.html) it actually changes the instructions we use to add the two numbers on the CPU. The assembly would instead look something like \(an AT&T dialect\) `lock addq ..., ...`instead of `addq ..., ...`which we'd normally expect.
+Ok, so when we use the methods of an atomic, such as `fetch_add` on [`AtomicUsize`](https://doc.rust-lang.org/std/sync/atomic/struct.AtomicUsize.html), the compiler actually changes the instructions it emits for the addition of the two numbers on the CPU. The assembly would instead look something like \(an AT&T dialect\) `lock addq ..., ...`instead of `addq ..., ...`which we'd normally expect.
 
 {% hint style="success" %}
 An atomic operation is a set of operations executed as one indivisible unit. Any observer is prevented from seeing any of the sub operations or acquiring the same data while it's being operated on. Any conflicting operation-B from another core on the same data will have to wait until the the first atomic operation-A is finished.
